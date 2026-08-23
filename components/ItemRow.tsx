@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ConfirmButton from "@/components/ConfirmButton";
 import NotesField from "@/components/NotesField";
-import { deleteItem, moveItem, setItemStatus } from "@/lib/items";
+import VideoPlayerModal from "@/components/VideoPlayerModal";
+import { deleteItem, markItemCompleteManually, moveItem, setItemStatus } from "@/lib/items";
 import type { Item } from "@/lib/db";
 
 const TYPE_BADGE: Record<Item["type"], string> = {
@@ -16,6 +17,14 @@ function formatDuration(seconds?: number) {
   if (!seconds) return null;
   const minutes = Math.round(seconds / 60);
   return `${minutes} min`;
+}
+
+function formatWatchedProgress(item: Item): string | null {
+  if (!item.watchedSeconds || !item.durationSeconds) return null;
+  const pct = Math.min(100, Math.round((item.watchedSeconds / item.durationSeconds) * 100));
+  const minutes = Math.floor(item.watchedSeconds / 60);
+  const seconds = Math.floor(item.watchedSeconds % 60);
+  return `Watched ${minutes}:${String(seconds).padStart(2, "0")} (${pct}%)`;
 }
 
 function PdfOpenLink({ blob }: { blob: Blob }) {
@@ -42,6 +51,8 @@ export default function ItemRow({
   canMoveUp: boolean;
   canMoveDown: boolean;
 }) {
+  const [playing, setPlaying] = useState(false);
+
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-amber-900/10 bg-white p-3 dark:border-amber-100/10 dark:bg-neutral-900">
       <div className="flex items-start justify-between gap-2">
@@ -53,12 +64,22 @@ export default function ItemRow({
             <span className="font-medium text-neutral-800 dark:text-neutral-100">
               {item.title}
             </span>
+            {item.type === "youtube_video" && (
+              <button
+                type="button"
+                onClick={() => setPlaying(true)}
+                className="rounded-md bg-amber-700 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-800"
+              >
+                ▶ Play
+              </button>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400">
             {formatDuration(item.durationSeconds) && (
               <span>{formatDuration(item.durationSeconds)}</span>
             )}
+            {formatWatchedProgress(item) && <span>{formatWatchedProgress(item)}</span>}
             {item.dateCompleted && (
               <span>Completed {new Date(item.dateCompleted).toLocaleDateString()}</span>
             )}
@@ -105,11 +126,24 @@ export default function ItemRow({
             <option value="in_progress">In progress</option>
             <option value="completed">Completed</option>
           </select>
+          <button
+            type="button"
+            disabled={item.status === "completed"}
+            onClick={() => markItemCompleteManually(item.id)}
+            title="Mark complete without in-app tracking — e.g. watched on youtube.com, or a PDF/link read elsewhere"
+            className="rounded-md px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+          >
+            {item.status === "completed" ? "✓ Completed" : "Mark complete"}
+          </button>
           <ConfirmButton label="Delete" onConfirm={() => deleteItem(item.id)} />
         </div>
       </div>
 
       <NotesField itemId={item.id} initialNotes={item.notes} />
+
+      {playing && item.type === "youtube_video" && (
+        <VideoPlayerModal item={item} onClose={() => setPlaying(false)} />
+      )}
     </div>
   );
 }

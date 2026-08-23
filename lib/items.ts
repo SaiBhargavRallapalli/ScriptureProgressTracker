@@ -5,6 +5,9 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Item } from "./db";
 import { newId } from "./id";
+import { createWatchSession } from "./watchSessions";
+
+const COMPLETION_THRESHOLD = 0.9;
 
 export type NewYoutubeVideoInput = {
   type: "youtube_video";
@@ -198,6 +201,70 @@ export async function createItemFromYoutubeVideo(
   const item = youtubeVideoToItem(scriptureId, position, video, now);
   await db.items.add(item);
   return item;
+}
+
+// --- Watch tracking (Phase 3) --------------------------------------------
+//
+// Only ever reads the Item fresh from Dexie rather than trusting a
+// possibly-stale object a caller might be holding — the in-app player's
+// tick loop calls this every 5 seconds from a long-lived closure, so it
+// can't rely on a prop staying current.
+
+/**
+ * Called on every tracking tick (playing, paused, ended, visibility-hidden,
+ * unmount-flush). `watchedSeconds` only ever moves Item.watchedSeconds
+ * *up* — a rewind during playback never erases earlier progress. Crossing
+ * the 90% threshold marks the item completed, but never re-stamps
+ * dateCompleted if it's already completed, so replaying a finished video
+ * doesn't reset its completion date.
+ */
+export async function recordWatchProgress(
+  itemId: string,
+  watchedSeconds: number,
+  durationSeconds?: number
+): Promise<void> {
+  const item = await db.items.get(itemId);
+  if (!item) return;
+
+  const patch: Partial<Item> = {};
+
+  if (watchedSeconds > (item.watchedSeconds ?? 0)) {
+    patch.watchedSeconds = watchedSeconds;
+  }
+
+  const effectiveDuration = durationSeconds || item.durationSeconds;
+  const reachedThreshold = !!effectiveDuration && watchedSeconds / effectiveDuration >= COMPLETION_THRESHOLD;
+
+  if (reachedThreshold && item.status !== "completed") {
+    patch.status = "completed";
+    patch.dateCompleted = new Date().toISOString();
+  }
+
+  if (Object.keys(patch).length === 0) return;
+  await db.items.update(itemId, { ...patch, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * The plain "mark as complete" action, available on every Item regardless
+ * of type — for pdf/video_link (tracking doesn't apply) or a youtube_video
+ * watched outside the in-app player (§0.2: there's no way to detect that
+ * automatically). Always logs a manual WatchSession so there's a record
+ * the action happened, but — same rule as recordWatchProgress — only
+ * (re)stamps status/dateCompleted if the item wasn't already completed.
+ */
+export async function markItemCompleteManually(itemId: string): Promise<void> {
+  const item = await db.items.get(itemId);
+  if (!item) return;
+
+  await createWatchSession(itemId, "manual");
+
+  if (item.status !== "completed") {
+    await db.items.update(itemId, {
+      status: "completed",
+      dateCompleted: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
 }
 
 export function useItems(scriptureId: string | undefined) {
