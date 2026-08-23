@@ -1,4 +1,28 @@
-# Setup & deployment (Phase 0)
+# Setup & deployment
+
+## Environment variables (Phase 2+)
+
+Phase 2 adds server-side YouTube Data API v3 calls, which need an API key.
+Copy `.env.example` to `.env.local` and fill it in:
+
+```bash
+cp .env.example .env.local
+```
+
+```
+YOUTUBE_API_KEY=your-key-here
+```
+
+Where to get one: Google Cloud Console → create/select a project → enable
+"YouTube Data API v3" → Credentials → Create API key → restrict it to that
+API. `.env.local` is gitignored — the key never gets committed.
+
+For production, add the same variable in Vercel: **Project Settings →
+Environment Variables → add `YOUTUBE_API_KEY`** (scope it to Production,
+and Preview too if you want playlist import to work on preview deploys).
+Redeploy after adding it — Vercel only picks up new env vars on the next
+build. The key is read only in `app/api/youtube/*/route.ts` (server-side)
+and never sent to the browser.
 
 ## Local development
 
@@ -78,3 +102,20 @@ phase.
 4. **No unexpected network calls**: DevTools → Network tab on a fresh load
    should show only requests to your own origin (`_next/static/*`,
    `manifest.json`, icons, fonts) — nothing external.
+
+## Verifying the Phase 2 (YouTube import) acceptance criteria
+
+1. **Real playlist**: paste one of your own playlist URLs into a scripture's
+   "Import from YouTube playlist" field. Confirm the imported item count
+   matches what YouTube's own playlist page shows (minus any reported
+   "skipped" count for private/deleted videos), and spot-check 2-3
+   durations/titles/thumbnails against the actual video pages.
+2. **Quota math**: Google Cloud Console → APIs & Services → YouTube Data
+   API v3 → Quotas (or Metrics tab) — after one import, the quota consumed
+   should be roughly `ceil(N/50)` units for `playlistItems.list` plus
+   `ceil(N/50)` units for `videos.list`, e.g. ~4 units for a 100-video
+   playlist (see `docs/ARCHITECTURE.md` §4.1). A much higher number means
+   something is re-fetching per video instead of batching.
+3. **Error handling**: paste an invalid string, a private playlist, or a
+   playlist ID that doesn't exist — you should get a readable message
+   inline on the page, not a crash or a raw 500.

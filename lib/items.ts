@@ -139,6 +139,67 @@ export async function moveItem(
   });
 }
 
+// --- YouTube import (Phase 2) --------------------------------------------
+//
+// The YouTube Data API calls themselves happen server-side in
+// app/api/youtube/*/route.ts (the API key must never reach the browser).
+// These two functions just take the already-fetched, normalized results
+// and write them into Dexie — same nextPosition()/newId() machinery as
+// createItem, so imported items never collide with existing positions.
+
+export interface YoutubeVideoDetails {
+  videoId: string;
+  title: string;
+  thumbnailUrl?: string;
+  durationSeconds: number;
+}
+
+function youtubeVideoToItem(
+  scriptureId: string,
+  position: number,
+  video: YoutubeVideoDetails,
+  now: string
+): Item {
+  return {
+    id: newId(),
+    scriptureId,
+    position,
+    type: "youtube_video",
+    title: video.title,
+    sourceUrl: `https://www.youtube.com/watch?v=${video.videoId}`,
+    durationSeconds: video.durationSeconds,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+    ...(video.thumbnailUrl ? { thumbnailUrl: video.thumbnailUrl } : {}),
+  };
+}
+
+/** Bulk-inserts imported playlist videos, in the order given, after whatever items already exist. */
+export async function createItemsFromYoutubePlaylist(
+  scriptureId: string,
+  videos: YoutubeVideoDetails[]
+): Promise<Item[]> {
+  if (videos.length === 0) return [];
+  const now = new Date().toISOString();
+  const base = await nextPosition(scriptureId);
+  const items = videos.map((video, index) => youtubeVideoToItem(scriptureId, base + index, video, now));
+  await db.items.bulkAdd(items);
+  return items;
+}
+
+/** Same as above for a single pasted video URL. */
+export async function createItemFromYoutubeVideo(
+  scriptureId: string,
+  video: YoutubeVideoDetails
+): Promise<Item> {
+  const now = new Date().toISOString();
+  const position = await nextPosition(scriptureId);
+  const item = youtubeVideoToItem(scriptureId, position, video, now);
+  await db.items.add(item);
+  return item;
+}
+
 export function useItems(scriptureId: string | undefined) {
   return useLiveQuery(
     () => (scriptureId ? db.items.where("scriptureId").equals(scriptureId).sortBy("position") : []),

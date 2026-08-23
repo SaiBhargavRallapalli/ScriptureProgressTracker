@@ -7,6 +7,7 @@ import ScriptureForm from "@/components/ScriptureForm";
 import ConfirmButton from "@/components/ConfirmButton";
 import ItemForm from "@/components/ItemForm";
 import ItemRow from "@/components/ItemRow";
+import YoutubeImport from "@/components/YoutubeImport";
 import {
   deleteScripture,
   updateScripture,
@@ -115,6 +116,8 @@ export default function ScriptureDetailPage() {
             </button>
           )}
         </div>
+
+        <YoutubeImport scriptureId={scripture.id} />
 
         {addingItem && (
           <ItemForm scriptureId={scripture.id} onDone={() => setAddingItem(false)} />
