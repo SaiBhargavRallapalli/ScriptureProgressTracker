@@ -252,3 +252,75 @@ the numbers are correct the moment the underlying rows are.
    something's wrong with the `useLiveQuery` wiring in `lib/stats.ts`
    (it should need zero manual refetching, the same way the Scriptures
    list page's progress bars already update live).
+
+## Phase 6 — cloud sync (optional, build this last)
+
+Only worth setting up once you're actually using the app on two devices
+— everything works fully offline on one device without it
+(ARCHITECTURE.md §6). Two things to add:
+
+1. **Neon Postgres**, via the Vercel Marketplace:
+   - Vercel dashboard → your project → **Storage** tab → **Create
+     Database** → **Neon** (Postgres).
+   - Connect it to this project. The dashboard's "Quickstart" panel shows
+     several env var names (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`,
+     `PGHOST`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, ...) — use the
+     plain pooled `DATABASE_URL`, not the `*_UNPOOLED` or `PG*`/`POSTGRES_*`
+     variants.
+   - Add it to `.env.local`:
+     ```
+     DATABASE_URL=postgres://...
+     ```
+   - For production, add the same variable in Vercel's Project Settings
+     → Environment Variables, then redeploy.
+   - No separate migration step — `lib/syncDb.ts`'s `ensureSchema()` runs
+     `create table if not exists` for all three tables the first time
+     `/api/sync` is called after a cold start.
+   - Neon's free tier scales compute to zero after 5 minutes idle, so
+     the first sync after a while may take a second or two (cold start)
+     — expected, not a bug.
+
+2. **A sync token** — a long random string you (or an assistant helping
+   you build this) generate yourself, e.g.:
+   ```
+   openssl rand -hex 32
+   ```
+   Add it to `.env.local`:
+   ```
+   SYNC_TOKEN=<the generated value>
+   ```
+   and to Vercel's production env vars too. Then paste the *same* value
+   into the app's Settings page on every device you want kept in sync —
+   it's checked by `proxy.ts` (Next.js 16's renamed `middleware.ts`) on
+   every request to `/api/sync/*`, rejecting anything without a matching
+   `Authorization: Bearer <token>` header.
+
+## Verifying the Phase 6 (cloud sync) acceptance criteria
+
+1. **Change propagates between "devices"**: open the app in one browser
+   profile, make a change (e.g. add a scripture or mark an item
+   complete), open Settings and click "Sync now". Open the app in a
+   *different* browser profile (or an incognito window) with the same
+   sync token pasted into its own Settings, click "Sync now" there —
+   confirm the change appears.
+2. **Conflicting edits resolve by `updatedAt`, no crash**: without
+   syncing in between, edit the same Item differently on both profiles
+   (e.g. different notes, or a different status), then sync profile A,
+   then sync profile B, then sync profile A again. Whichever edit has
+   the later `updatedAt` should be the one both profiles end up with —
+   confirm neither sync call errors or crashes.
+3. **Missing token is rejected**: with the app running locally,
+   ```
+   curl -i -X POST http://localhost:3000/api/sync \
+     -H "Content-Type: application/json" \
+     -d '{"since": null, "entries": []}'
+   ```
+   should come back `401 Unauthorized` (no `Authorization` header at
+   all). Repeat with the right header:
+   ```
+   curl -i -X POST http://localhost:3000/api/sync \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer $SYNC_TOKEN" \
+     -d '{"since": null, "entries": []}'
+   ```
+   should come back `200` with a `changes` object.

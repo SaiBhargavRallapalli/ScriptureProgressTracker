@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Nav from "@/components/Nav";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import SyncRegister from "@/components/SyncRegister";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="flex min-h-full flex-col bg-amber-50/40 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
         <ServiceWorkerRegister />
+        <SyncRegister />
         <Nav />
         <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
           {children}

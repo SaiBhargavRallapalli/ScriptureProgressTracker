@@ -17,14 +17,18 @@ export async function createWatchSession(
     endedAt: now,
     secondsWatched: 0,
     source,
+    // Phase 6: needed for last-write-wins sync — see lib/db.ts.
+    updatedAt: now,
   };
   await db.watchSessions.add(session);
   return session.id;
 }
 
 export async function touchWatchSession(sessionId: string, secondsWatched: number): Promise<void> {
+  const now = new Date().toISOString();
   await db.watchSessions.update(sessionId, {
-    endedAt: new Date().toISOString(),
+    endedAt: now,
     secondsWatched,
+    updatedAt: now,
   });
 }

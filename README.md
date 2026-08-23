@@ -4,7 +4,7 @@ A local-first, installable PWA for tracking scripture study and sadhana
 habits. See `docs/ARCHITECTURE.md` for the full design and phased build
 plan; this README covers what's built so far and how to run it.
 
-## What's built (Phases 0-5)
+## What's built (Phases 0-6)
 
 **Phase 0 — offline app shell.** Next.js (App Router) + TypeScript +
 Tailwind. `public/manifest.json` + a generated service worker
@@ -64,6 +64,25 @@ renders it: a progress card per scripture, summary totals, and a
 Recharts bar chart. Change an Item's status anywhere in the app and
 these numbers update on their own, no refresh needed.
 
+**Phase 6 — cloud sync (optional).** Every write to Scriptures/Items/
+WatchSessions is mirrored into an `outbox` table automatically, via
+Dexie hooks in `lib/db.ts` (not hand-wired into each mutator — a hook
+fires for every write regardless of which function performed it).
+`lib/sync.ts` pushes unsynced outbox rows to `app/api/sync/route.ts` in
+batches and applies whatever changes come back into Dexie — both sides
+upsert by `id` with a strict "only overwrite if the incoming `updatedAt`
+is newer" rule (last-write-wins; ARCHITECTURE.md §6), and a delete is a
+tombstone (`deletedAt` set), never a hard delete, so it can propagate to
+other devices on their next pull. Postgres access is server-only
+(`lib/syncDb.ts`, `postgres.js`, no ORM — three tables didn't need one);
+`proxy.ts` (Next.js 16's renamed `middleware.ts`) rejects any
+`/api/sync/*` request without the right bearer token. Sync runs on the
+browser's `online` event (confirmed by the sync fetch actually
+succeeding, not just `navigator.onLine`) and from a "Sync now" button on
+the Settings page, which also shows when it last succeeded. None of this
+is required to use the app — everything still works fully offline on a
+single device with sync never configured.
+
 ## Running it
 
 ```bash
@@ -85,10 +104,10 @@ npm run start
 
 See `docs/SETUP.md` for exact steps to deploy to Vercel's free Hobby
 plan, required environment variables (`YOUTUBE_API_KEY`,
-`BLOB_READ_WRITE_TOKEN`), and a checklist for verifying each phase's
-acceptance criteria yourself.
+`BLOB_READ_WRITE_TOKEN`, `DATABASE_URL`, `SYNC_TOKEN`), and a checklist
+for verifying each phase's acceptance criteria yourself.
 
 ## What's next
 
-See `docs/ARCHITECTURE.md` §8 for the full phase list of what comes
-after Phase 5.
+See `docs/ARCHITECTURE.md` §8 for the full phase list — Phase 7
+(optional native packaging) is all that's left.
