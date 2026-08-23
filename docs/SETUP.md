@@ -222,3 +222,33 @@ entirely:
    this fetches through `/api/pdf-search/proxy` (not the raw archive.org
    URL — see the CORS note above) and caches the bytes into Dexie. Then
    go offline and reopen — should render with zero network calls.
+
+## Phase 5 — dashboard
+
+No new environment variables or external services. `lib/stats.ts` reads
+straight from Dexie (`scriptures`, `items`, `watchSessions`) — nothing
+here is a stored aggregate, so there's no separate sync/backfill step;
+the numbers are correct the moment the underlying rows are.
+
+## Verifying the Phase 5 (dashboard) acceptance criteria
+
+1. **Numbers match by hand**: create 2-3 scriptures with a handful of
+   items each — mix of `pending`/`in_progress`/`completed` statuses, and
+   for the completed ones, complete them in different calendar months
+   (you can backdate by editing an item's `dateCompleted` via DevTools →
+   Application → IndexedDB if you don't want to wait months between
+   tests). On the dashboard, count by hand: each scripture's card should
+   show exactly completed/pending/total and the matching percentage; the
+   monthly bar chart should show a bar in each month you completed
+   something in, with the right height; "Completed this month" should
+   match the current month's bar.
+2. **Hours watched vs. read stay separate**: play a YouTube video partway
+   in-app and read a few pages of a PDF, then check the two summary
+   cards — watched time should only reflect video playback, read time
+   only PDF reading time, never combined into one number.
+3. **Live update, no reload**: from a scripture's page, change an Item's
+   status (e.g. mark something complete), then click "Dashboard" in the
+   nav — the numbers should already reflect the change. If they don't,
+   something's wrong with the `useLiveQuery` wiring in `lib/stats.ts`
+   (it should need zero manual refetching, the same way the Scriptures
+   list page's progress bars already update live).

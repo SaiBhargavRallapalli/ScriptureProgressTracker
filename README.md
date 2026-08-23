@@ -4,7 +4,7 @@ A local-first, installable PWA for tracking scripture study and sadhana
 habits. See `docs/ARCHITECTURE.md` for the full design and phased build
 plan; this README covers what's built so far and how to run it.
 
-## What's built (Phases 0-4)
+## What's built (Phases 0-5)
 
 **Phase 0 — offline app shell.** Next.js (App Router) + TypeScript +
 Tailwind. `public/manifest.json` + a generated service worker
@@ -54,6 +54,16 @@ same-origin, nothing-persisted stream-through) instead of the raw
 archive.org URL, so Phase 4's cache-on-first-open logic keeps working
 unmodified.
 
+**Phase 5 — dashboard.** `lib/stats.ts` computes every number shown —
+per-scripture completed/pending/total/percentage, hours watched vs.
+hours read (kept separate, summed from `WatchSession` grouped by the
+owning Item's type), and a 12-month completions histogram — live off
+the Item/WatchSession tables via `useLiveQuery`, with nothing stored as
+a redundant aggregate (ARCHITECTURE.md §1). The home page (`app/page.tsx`)
+renders it: a progress card per scripture, summary totals, and a
+Recharts bar chart. Change an Item's status anywhere in the app and
+these numbers update on their own, no refresh needed.
+
 ## Running it
 
 ```bash
@@ -80,5 +90,5 @@ acceptance criteria yourself.
 
 ## What's next
 
-See `docs/ARCHITECTURE.md` §8 for the full phase list. Phase 5
-(dashboard) is next.
+See `docs/ARCHITECTURE.md` §8 for the full phase list of what comes
+after Phase 5.
