@@ -8,6 +8,7 @@ import ConfirmButton from "@/components/ConfirmButton";
 import ItemForm from "@/components/ItemForm";
 import ItemRow from "@/components/ItemRow";
 import YoutubeImport from "@/components/YoutubeImport";
+import PdfDiscovery from "@/components/PdfDiscovery";
 import {
   deleteScripture,
   updateScripture,
@@ -118,6 +119,7 @@ export default function ScriptureDetailPage() {
         </div>
 
         <YoutubeImport scriptureId={scripture.id} />
+        <PdfDiscovery scriptureId={scripture.id} defaultQuery={scripture.title} />
 
         {addingItem && (
           <ItemForm scriptureId={scripture.id} onDone={() => setAddingItem(false)} />

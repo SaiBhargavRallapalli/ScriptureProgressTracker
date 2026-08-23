@@ -354,6 +354,79 @@ export async function markPdfSavedToCloud(itemId: string, pathname: string): Pro
   });
 }
 
+// --- Discovered PDFs (Phase 4b) -------------------------------------------
+//
+// Two creators, one per branch of ARCHITECTURE.md §5.2's storage rule.
+// Both are only ever called from components/PdfDiscovery.tsx after the
+// user picks a specific search result and an action for it.
+
+export interface DiscoveredPdfInput {
+  scriptureId: string;
+  title: string;
+  sourceUrl: string;
+  licenseUrl?: string;
+}
+
+/**
+ * "Add as link" — used for any discovered PDF the user doesn't save
+ * permanently (always for unlicensed results; optionally for licensed
+ * ones too). Never touches Blob storage. sourceUrl points at our own
+ * /api/pdf-search/proxy route rather than the raw archive.org URL — a
+ * same-origin stream-through with nothing persisted server-side, needed
+ * because archive.org's download CDN doesn't send CORS headers, so a
+ * direct browser fetch() of it fails. resolveAndCachePdfBlob (unchanged
+ * from Phase 4) still only ever writes the bytes into this device's
+ * IndexedDB, the first time the item is actually opened.
+ */
+export async function createItemFromDiscoveredPdfLink(input: DiscoveredPdfInput): Promise<Item> {
+  const now = new Date().toISOString();
+  const position = await nextPosition(input.scriptureId);
+  const item: Item = {
+    id: newId(),
+    scriptureId: input.scriptureId,
+    position,
+    type: "pdf",
+    title: input.title,
+    sourceUrl: `/api/pdf-search/proxy?url=${encodeURIComponent(input.sourceUrl)}`,
+    pdfStorage: "link",
+    ...(input.licenseUrl ? { licenseUrl: input.licenseUrl } : {}),
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db.items.add(item);
+  return item;
+}
+
+/**
+ * "Save permanently" — only ever called after app/api/pdf-search/save
+ * has already succeeded (that route itself re-checks licenseUrl is
+ * present, so this can't be reached for an unlicensed pick even by a
+ * bug in the calling UI). sourceUrl points at the private-Blob read
+ * proxy, same pattern as markPdfSavedToCloud.
+ */
+export async function createItemFromDiscoveredPdfBlob(
+  input: DiscoveredPdfInput & { pathname: string }
+): Promise<Item> {
+  const now = new Date().toISOString();
+  const position = await nextPosition(input.scriptureId);
+  const item: Item = {
+    id: newId(),
+    scriptureId: input.scriptureId,
+    position,
+    type: "pdf",
+    title: input.title,
+    sourceUrl: `/api/blob/file?pathname=${encodeURIComponent(input.pathname)}`,
+    pdfStorage: "blob",
+    ...(input.licenseUrl ? { licenseUrl: input.licenseUrl } : {}),
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db.items.add(item);
+  return item;
+}
+
 export function useItems(scriptureId: string | undefined) {
   return useLiveQuery(
     () => (scriptureId ? db.items.where("scriptureId").equals(scriptureId).sortBy("position") : []),

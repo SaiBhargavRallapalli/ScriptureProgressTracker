@@ -41,6 +41,19 @@ cloud" action (Vercel Blob) — never called automatically by the regular
 upload flow. Reading time is logged as a `WatchSession` (`source:
 "reading"`) via the Page Visibility API, paused while the tab is hidden.
 
+**Phase 4b — automatic PDF discovery.** "🔎 Find PDF online" on a
+scripture's page searches archive.org (`lib/archiveOrg.ts` +
+`app/api/pdf-search/route.ts`, no API key needed) and enforces
+ARCHITECTURE.md §5.2's storage rule exactly: a confirmed public-domain/
+openly-licensed result can be "☁ Save permanently" (fetched server-side
+and uploaded to Blob, via `app/api/pdf-search/save/route.ts`); anything
+else only gets "Add as link" — `pdfStorage: 'link'`, no Blob call ever.
+Because archive.org's download CDN doesn't send CORS headers, a "link"
+Item's `sourceUrl` points at `app/api/pdf-search/proxy/route.ts` (a
+same-origin, nothing-persisted stream-through) instead of the raw
+archive.org URL, so Phase 4's cache-on-first-open logic keeps working
+unmodified.
+
 ## Running it
 
 ```bash
@@ -67,6 +80,5 @@ acceptance criteria yourself.
 
 ## What's next
 
-See `docs/ARCHITECTURE.md` §8 for the full phase list. Phase 4b
-(automatic PDF discovery via archive.org/Wikisource) and Phase 5
-(dashboard) are next.
+See `docs/ARCHITECTURE.md` §8 for the full phase list. Phase 5
+(dashboard) is next.

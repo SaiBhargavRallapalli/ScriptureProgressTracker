@@ -155,6 +155,32 @@ phase.
    playlist ID that doesn't exist — you should get a readable message
    inline on the page, not a crash or a raw 500.
 
+## Phase 4b — automatic PDF discovery (archive.org)
+
+No new environment variables — this reuses `BLOB_READ_WRITE_TOKEN` from
+Phase 4 (only for the "Save permanently" action on a licensed result) and
+calls archive.org's free, keyless search/metadata APIs directly.
+
+One implementation note worth knowing: archive.org's download CDN
+doesn't send `Access-Control-Allow-Origin`, so a browser can't `fetch()`
+an archive.org PDF URL directly (confirmed against a real download URL).
+Two routes work around this, both server-side to dodge the CORS problem
+entirely:
+
+- `app/api/pdf-search/save/route.ts` — for a **licensed** pick, fetches
+  the PDF server-side and uploads it to Vercel Blob (same 4.5MB Hobby
+  cap as the manual upload route).
+- `app/api/pdf-search/proxy/route.ts` — for **any** "Add as link" pick
+  (licensed or not), streams the PDF through our server without storing
+  it anywhere. `Item.sourceUrl` for a "link" item points at this proxy
+  route rather than the raw archive.org URL, so Phase 4's
+  `resolveAndCachePdfBlob` can keep doing a plain same-origin `fetch()`
+  unmodified — the bytes still only get cached into that device's
+  IndexedDB the first time the item is opened, exactly as
+  ARCHITECTURE.md §5.2 specifies. Both routes only ever fetch from
+  `archive.org` hosts (checked in `lib/archiveOrg.ts`'s
+  `assertArchiveOrgUrl`) so neither becomes an open URL-fetch proxy.
+
 ## Verifying the Phase 4 (PDF handling) acceptance criteria
 
 1. **Manual upload renders correctly**: add a PDF to an Item (the regular
@@ -175,3 +201,24 @@ phase.
    through `/api/blob/file` and caches the bytes into Dexie), then go
    offline and reopen again — should render with zero network calls the
    second time.
+
+## Verifying the Phase 4b (PDF discovery) acceptance criteria
+
+1. **Real search results**: on a scripture's page, click "🔎 Find PDF
+   online", search "Bhagavad Gita", and confirm you get real archive.org
+   results with a title and a "Public domain" or "License unknown" badge.
+   Open a result's "View source ↗" link directly — it should download or
+   preview a real PDF.
+2. **Licensed pick, saved permanently**: pick a "Public domain" result
+   and click "☁ Save permanently". Confirm it succeeds and the new Item
+   shows "Saved to cloud" (same status line Phase 4 uses). Check the
+   Network tab: `/api/pdf-search/save` fires once; `/api/blob/upload` is
+   never called for this flow (it's a separate internal helper now, see
+   `lib/blobServer.ts`).
+3. **Unlicensed pick, link only**: pick a "License unknown" result and
+   click "Add as link". Confirm no request to `/api/pdf-search/save` or
+   `/api/blob/upload` happens — open DevTools → Network and verify. The
+   new Item should show as not yet downloaded. Open it once (📖 Read) —
+   this fetches through `/api/pdf-search/proxy` (not the raw archive.org
+   URL — see the CORS note above) and caches the bytes into Dexie. Then
+   go offline and reopen — should render with zero network calls.
