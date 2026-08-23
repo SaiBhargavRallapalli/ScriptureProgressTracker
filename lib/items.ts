@@ -211,12 +211,24 @@ export async function createItemFromYoutubeVideo(
 // can't rely on a prop staying current.
 
 /**
+ * Shared by every "did this item just get finished" check (video %,
+ * reading page, manual button): flips status to completed and stamps
+ * dateCompleted only if it isn't already completed, so re-triggering
+ * completion (replaying a video, re-opening a finished PDF, clicking
+ * "mark complete" twice) never resets the original completion date.
+ */
+function completionPatch(item: Item, reached: boolean): Partial<Item> {
+  if (reached && item.status !== "completed") {
+    return { status: "completed", dateCompleted: new Date().toISOString() };
+  }
+  return {};
+}
+
+/**
  * Called on every tracking tick (playing, paused, ended, visibility-hidden,
  * unmount-flush). `watchedSeconds` only ever moves Item.watchedSeconds
  * *up* — a rewind during playback never erases earlier progress. Crossing
- * the 90% threshold marks the item completed, but never re-stamps
- * dateCompleted if it's already completed, so replaying a finished video
- * doesn't reset its completion date.
+ * the 90% threshold marks the item completed via completionPatch().
  */
 export async function recordWatchProgress(
   itemId: string,
@@ -233,15 +245,45 @@ export async function recordWatchProgress(
   }
 
   const effectiveDuration = durationSeconds || item.durationSeconds;
-  const reachedThreshold = !!effectiveDuration && watchedSeconds / effectiveDuration >= COMPLETION_THRESHOLD;
-
-  if (reachedThreshold && item.status !== "completed") {
-    patch.status = "completed";
-    patch.dateCompleted = new Date().toISOString();
-  }
+  const reached = !!effectiveDuration && watchedSeconds / effectiveDuration >= COMPLETION_THRESHOLD;
+  Object.assign(patch, completionPatch(item, reached));
 
   if (Object.keys(patch).length === 0) return;
   await db.items.update(itemId, { ...patch, updatedAt: new Date().toISOString() });
+}
+
+/**
+ * Phase 4 equivalent of recordWatchProgress, for PDFs. lastPageViewed
+ * always reflects wherever the user last was (so reopening resumes
+ * there, even if that's earlier than the furthest page they've reached).
+ * Completion triggers when the current page reaches the item's
+ * targetPageCount if set, otherwise the PDF's actual last page — via the
+ * same completionPatch() guard used for videos.
+ */
+export async function recordReadingProgress(
+  itemId: string,
+  pageViewed: number,
+  totalPages: number
+): Promise<void> {
+  const item = await db.items.get(itemId);
+  if (!item) return;
+
+  const target = item.targetPageCount || totalPages;
+  const reached = pageViewed >= target;
+
+  const patch: Partial<Item> = {
+    lastPageViewed: pageViewed,
+    ...completionPatch(item, reached),
+  };
+
+  await db.items.update(itemId, { ...patch, updatedAt: new Date().toISOString() });
+}
+
+export async function setTargetPageCount(itemId: string, targetPageCount: number | undefined): Promise<void> {
+  await db.items.update(itemId, {
+    targetPageCount: targetPageCount && targetPageCount > 0 ? targetPageCount : undefined,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 /**
@@ -258,13 +300,58 @@ export async function markItemCompleteManually(itemId: string): Promise<void> {
 
   await createWatchSession(itemId, "manual");
 
-  if (item.status !== "completed") {
-    await db.items.update(itemId, {
-      status: "completed",
-      dateCompleted: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+  const patch = completionPatch(item, true);
+  if (Object.keys(patch).length > 0) {
+    await db.items.update(itemId, { ...patch, updatedAt: new Date().toISOString() });
   }
+}
+
+// --- PDF handling (Phase 4) -----------------------------------------------
+
+/**
+ * Returns the PDF's bytes as a Blob, resolving from whichever source the
+ * Item actually has (ARCHITECTURE.md §5.1): if pdfBlob is already stored
+ * locally, use it directly with zero network. Otherwise fetch sourceUrl
+ * once and cache the result into pdfBlob so every subsequent open needs
+ * zero network too, regardless of whether the URL is a Vercel Blob URL
+ * (Phase 4) or, eventually, an external link (Phase 4b).
+ */
+export async function resolveAndCachePdfBlob(item: Item): Promise<Blob> {
+  if (item.pdfBlob) return item.pdfBlob;
+
+  if (!item.sourceUrl || item.sourceUrl.startsWith("local:")) {
+    throw new Error("No PDF is available for this item yet.");
+  }
+
+  const res = await fetch(item.sourceUrl);
+  if (!res.ok) {
+    throw new Error(`Couldn't download the PDF (HTTP ${res.status}).`);
+  }
+  const blob = await res.blob();
+
+  await db.items.update(item.id, { pdfBlob: blob, updatedAt: new Date().toISOString() });
+
+  return blob;
+}
+
+/**
+ * Records the result of a successful upload to app/api/blob/upload — that
+ * route call itself (and the explicit-action gating around it) lives in
+ * SaveToCloudButton, since it's a network call to our own API, not a
+ * Dexie write. This just persists the result.
+ *
+ * sourceUrl is set to our own /api/blob/file proxy, not the blob's real
+ * (private) URL — the store is private, so the real URL 403s on a plain
+ * fetch. Pointing at our own route means resolveAndCachePdfBlob's
+ * ordinary `fetch(item.sourceUrl)` keeps working unmodified: it just
+ * happens to hit our server, which holds the token.
+ */
+export async function markPdfSavedToCloud(itemId: string, pathname: string): Promise<void> {
+  await db.items.update(itemId, {
+    sourceUrl: `/api/blob/file?pathname=${encodeURIComponent(pathname)}`,
+    pdfStorage: "blob",
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export function useItems(scriptureId: string | undefined) {

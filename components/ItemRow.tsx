@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import ConfirmButton from "@/components/ConfirmButton";
+import Modal from "@/components/Modal";
 import NotesField from "@/components/NotesField";
+import PdfViewer from "@/components/PdfViewer";
+import SaveToCloudButton from "@/components/SaveToCloudButton";
 import VideoPlayerModal from "@/components/VideoPlayerModal";
 import { deleteItem, markItemCompleteManually, moveItem, setItemStatus } from "@/lib/items";
 import type { Item } from "@/lib/db";
@@ -27,19 +30,12 @@ function formatWatchedProgress(item: Item): string | null {
   return `Watched ${minutes}:${String(seconds).padStart(2, "0")} (${pct}%)`;
 }
 
-function PdfOpenLink({ blob }: { blob: Blob }) {
-  const url = useMemo(() => URL.createObjectURL(blob), [blob]);
-  useEffect(() => () => URL.revokeObjectURL(url), [url]);
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-xs text-amber-700 hover:underline dark:text-amber-400"
-    >
-      Open PDF ({Math.round(blob.size / 1024)} KB, stored on this device)
-    </a>
-  );
+function formatReadingProgress(item: Item): string | null {
+  if (!item.lastPageViewed) return null;
+  const target = item.targetPageCount;
+  return target
+    ? `Page ${item.lastPageViewed} of ${target} target`
+    : `Page ${item.lastPageViewed}`;
 }
 
 export default function ItemRow({
@@ -52,6 +48,7 @@ export default function ItemRow({
   canMoveDown: boolean;
 }) {
   const [playing, setPlaying] = useState(false);
+  const [reading, setReading] = useState(false);
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-amber-900/10 bg-white p-3 dark:border-amber-100/10 dark:bg-neutral-900">
@@ -73,6 +70,15 @@ export default function ItemRow({
                 ▶ Play
               </button>
             )}
+            {item.type === "pdf" && (
+              <button
+                type="button"
+                onClick={() => setReading(true)}
+                className="rounded-md bg-amber-700 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-800"
+              >
+                📖 Read
+              </button>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400">
@@ -80,11 +86,21 @@ export default function ItemRow({
               <span>{formatDuration(item.durationSeconds)}</span>
             )}
             {formatWatchedProgress(item) && <span>{formatWatchedProgress(item)}</span>}
+            {formatReadingProgress(item) && <span>{formatReadingProgress(item)}</span>}
             {item.dateCompleted && (
               <span>Completed {new Date(item.dateCompleted).toLocaleDateString()}</span>
             )}
-            {item.type === "pdf" && item.pdfBlob ? (
-              <PdfOpenLink blob={item.pdfBlob} />
+            {item.type === "pdf" ? (
+              <>
+                <span>
+                  {item.pdfStorage === "blob"
+                    ? "Saved to cloud"
+                    : item.pdfBlob
+                      ? `Stored on this device (${Math.round(item.pdfBlob.size / 1024)} KB)`
+                      : "Not downloaded yet"}
+                </span>
+                <SaveToCloudButton item={item} />
+              </>
             ) : item.sourceUrl && !item.sourceUrl.startsWith("local:") ? (
               <a
                 href={item.sourceUrl}
@@ -143,6 +159,12 @@ export default function ItemRow({
 
       {playing && item.type === "youtube_video" && (
         <VideoPlayerModal item={item} onClose={() => setPlaying(false)} />
+      )}
+
+      {reading && item.type === "pdf" && (
+        <Modal onClose={() => setReading(false)} title={item.title}>
+          <PdfViewer item={item} />
+        </Modal>
       )}
     </div>
   );

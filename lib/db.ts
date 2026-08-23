@@ -33,6 +33,11 @@ export interface Item {
   notes?: string;
   watchedSeconds?: number;
   lastPageViewed?: number;
+  // Phase 4: optional user-set page to treat as "done" for long PDFs where
+  // reaching the literal last page isn't the realistic completion signal
+  // (ARCHITECTURE.md §5.3). Falls back to the PDF's actual page count
+  // when unset.
+  targetPageCount?: number;
   pdfBlob?: Blob;
   pdfStorage?: "local" | "blob" | "link";
   licenseUrl?: string;
@@ -46,7 +51,12 @@ export interface WatchSession {
   startedAt: string;
   endedAt?: string;
   secondsWatched: number;
-  source: "in_app_player" | "manual";
+  // "reading" (Phase 4): time spent with a PDF viewer visible/focused,
+  // tracked the same way as video watch time (Page Visibility API pauses
+  // it on hidden). Kept distinct from "manual" so a future dashboard can
+  // tell "I timed myself reading this" apart from "I just clicked
+  // complete with no tracking at all".
+  source: "in_app_player" | "manual" | "reading";
 }
 
 export interface OutboxEntry {
@@ -71,6 +81,10 @@ class ScriptureTrackerDB extends Dexie {
   constructor() {
     super("scripture-tracker");
 
+    // Still version 1: targetPageCount and the "reading" source value are
+    // new optional/widened fields on existing objects, not new indexes —
+    // Dexie/IndexedDB doesn't need a version bump for that, since objects
+    // are schemaless beyond their declared indexes.
     this.version(1).stores({
       scriptures: "id, title, sourceType, createdAt, updatedAt",
       items:

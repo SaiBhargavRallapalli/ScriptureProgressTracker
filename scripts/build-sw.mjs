@@ -10,10 +10,11 @@
 // for the build.
 //
 // Strategy:
-//  - Precache every content-hashed JS/CSS chunk under .next/static/** and
-//    the PWA-specific files in public/ (manifest, icons). These are safe to
-//    cache aggressively because their filenames change whenever their
-//    content does.
+//  - Precache every content-hashed file under .next/static/** (JS/CSS, plus
+//    Phase 4's pdf.js worker chunk which is a bundler-emitted .mjs asset,
+//    not .js) and the PWA-specific files in public/ (manifest, icons).
+//    These are safe to cache aggressively because their filenames change
+//    whenever their content does.
 //  - Runtime-cache page navigations with NetworkFirst, so once a route has
 //    been visited online, reloading it offline serves the last-seen HTML
 //    instead of the browser's offline error page.
@@ -36,7 +37,7 @@ const buildId = existsSync(buildIdPath)
 const { count, size, warnings } = await generateSW({
   swDest: path.join(root, "public", "sw.js"),
   globDirectory: root,
-  globPatterns: [".next/static/**/*.{js,css}"],
+  globPatterns: [".next/static/**/*"],
   globIgnores: ["**/*.map"],
   modifyURLPrefix: {
     ".next/static/": "/_next/static/",

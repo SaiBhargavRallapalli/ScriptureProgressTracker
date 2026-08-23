@@ -9,9 +9,11 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "dexie": "^4.0.10",
     "dexie-react-hooks": "^1.1.7",
     "next": "16.3.2",
+    "pdfjs-dist": "^4.10.38",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },

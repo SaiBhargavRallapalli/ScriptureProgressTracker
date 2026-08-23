@@ -24,6 +24,41 @@ Redeploy after adding it — Vercel only picks up new env vars on the next
 build. The key is read only in `app/api/youtube/*/route.ts` (server-side)
 and never sent to the browser.
 
+### Vercel Blob (Phase 4 — "save PDF permanently to cloud")
+
+Add a second variable, `BLOB_READ_WRITE_TOKEN`:
+
+```
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
+```
+
+1. Vercel dashboard → your project → **Storage** tab → **Create Database** → **Blob**.
+2. Connect it to this project. Vercel's dashboard shows a "Quickstart"/env
+   snippet with the exact `BLOB_READ_WRITE_TOKEN=...` line — copy that,
+   not the store's hostname or store ID (those look similar but aren't
+   the token).
+3. **Access mode matters**: as of mid-2026 new Blob stores default to
+   **private**. This app is built for that — uploads use
+   `access: 'private'`, and reads go through
+   `app/api/blob/file/route.ts`, which holds the token server-side and
+   streams the bytes back (a private blob's real URL 403s on a plain
+   client-side fetch, so `Item.sourceUrl` for a cloud-saved PDF points at
+   `/api/blob/file?pathname=...`, i.e. our own route, not the blob's real
+   URL). If your store is public instead, uploads still work but you'd
+   want to simplify the code to use the direct blob URL — ask if you want
+   that swapped.
+4. For production, add the same `BLOB_READ_WRITE_TOKEN` in Vercel's
+   Project Settings → Environment Variables, then redeploy.
+
+One real constraint worth knowing: Vercel's Hobby-plan serverless
+functions cap request bodies at ~4.5MB, so `app/api/blob/upload/route.ts`
+rejects anything larger with a clear error before even trying. A scanned
+commentary PDF can easily exceed that — those files just stay
+local-only (`pdfStorage: 'local'`) unless/until we switch to the
+client-direct-upload pattern (`@vercel/blob/client`'s `upload()` with a
+signed-token route), which bypasses the function body limit entirely.
+Worth doing if this turns out to matter in practice.
+
 ## Local development
 
 ```bash
@@ -119,3 +154,24 @@ phase.
 3. **Error handling**: paste an invalid string, a private playlist, or a
    playlist ID that doesn't exist — you should get a readable message
    inline on the page, not a crash or a raw 500.
+
+## Verifying the Phase 4 (PDF handling) acceptance criteria
+
+1. **Manual upload renders correctly**: add a PDF to an Item (the regular
+   file-picker flow from Phase 1), click "📖 Read", confirm it opens and
+   pages render. This path never touches the network — the file went
+   straight into Dexie.
+2. **Offline reopen resumes**: read a few pages in, close the modal, then
+   fully close/reopen the app (or just DevTools → Network → Offline →
+   reload). Reopening that PDF should still work and resume near the
+   page you left off ("Page X of Y" reflects `lastPageViewed`).
+3. **Cloud save is opt-in only**: on a local-only PDF, confirm the "☁ Save
+   permanently" button only appears next to that specific Item, and check
+   Vercel's Blob store dashboard (or the Network tab) to confirm
+   `/api/blob/upload` fires exactly once, only on that click — not on the
+   original upload, not on later reopens.
+4. **Cloud-saved PDF still opens offline after the first read**: after
+   saving permanently, reopen the Item once while online (this fetches
+   through `/api/blob/file` and caches the bytes into Dexie), then go
+   offline and reopen again — should render with zero network calls the
+   second time.
