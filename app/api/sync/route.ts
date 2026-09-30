@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/dal";
 import {
   ensureSchema,
   getServerTime,
@@ -14,8 +15,11 @@ import {
 } from "@/lib/syncDb";
 
 // POST /api/sync — the only sync endpoint (ARCHITECTURE.md §6).
-// Protected by middleware.ts (bearer token), not here — this route
-// trusts that anything reaching it already passed that check.
+// Optimistically gated by proxy.ts (a valid session cookie must be
+// present at all), but the real, enforced check is requireApiSession()
+// below — every row this route touches is scoped to that session's own
+// userId, never a client-supplied one, so cross-account data leakage is
+// structurally impossible even if proxy.ts were ever bypassed.
 //
 // Body: { since: string | null, entries: OutboxBatchEntry[] }
 // - `entries` is a batch of the client's unsynced outbox rows, applied
@@ -25,7 +29,7 @@ import {
 //   free to retry a failed batch wholesale rather than track partial
 //   success.
 // - `since` is the client's last-known-good server timestamp; anything
-//   changed after it (across all three tables, from ANY device) comes
+//   this account changed after it (from ANY of their devices) comes
 //   back in `changes`, along with a fresh `serverTime` to use as the
 //   next `since`.
 
@@ -47,7 +51,7 @@ function num(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
-function toScriptureRow(payload: Record<string, unknown>): ScriptureRow {
+function toScriptureRow(userId: string, payload: Record<string, unknown>): ScriptureRow {
   const id = str(payload.id);
   const title = str(payload.title);
   const updatedAt = str(payload.updatedAt);
@@ -58,6 +62,7 @@ function toScriptureRow(payload: Record<string, unknown>): ScriptureRow {
   }
   return {
     id,
+    userId,
     title,
     description: str(payload.description) ?? null,
     sourceType,
@@ -70,7 +75,7 @@ function toScriptureRow(payload: Record<string, unknown>): ScriptureRow {
   };
 }
 
-function toItemRow(payload: Record<string, unknown>): ItemRow {
+function toItemRow(userId: string, payload: Record<string, unknown>): ItemRow {
   const id = str(payload.id);
   const scriptureId = str(payload.scriptureId);
   const type = str(payload.type);
@@ -83,6 +88,7 @@ function toItemRow(payload: Record<string, unknown>): ItemRow {
   }
   return {
     id,
+    userId,
     scriptureId,
     position: num(payload.position) ?? 0,
     type,
@@ -104,7 +110,7 @@ function toItemRow(payload: Record<string, unknown>): ItemRow {
   };
 }
 
-function toWatchSessionRow(payload: Record<string, unknown>): WatchSessionRow {
+function toWatchSessionRow(userId: string, payload: Record<string, unknown>): WatchSessionRow {
   const id = str(payload.id);
   const itemId = str(payload.itemId);
   const startedAt = str(payload.startedAt);
@@ -115,6 +121,7 @@ function toWatchSessionRow(payload: Record<string, unknown>): WatchSessionRow {
   }
   return {
     id,
+    userId,
     itemId,
     startedAt,
     endedAt: str(payload.endedAt) ?? null,
@@ -126,6 +133,12 @@ function toWatchSessionRow(payload: Record<string, unknown>): WatchSessionRow {
 }
 
 export async function POST(request: Request) {
+  const session = await requireApiSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+  const userId = session.userId;
+
   let body: SyncRequestBody;
   try {
     body = await request.json();
@@ -150,11 +163,11 @@ export async function POST(request: Request) {
   for (const entry of body.entries) {
     try {
       if (entry.entityType === "scripture") {
-        await upsertScripture(toScriptureRow(entry.payload));
+        await upsertScripture(toScriptureRow(userId, entry.payload));
       } else if (entry.entityType === "item") {
-        await upsertItem(toItemRow(entry.payload));
+        await upsertItem(toItemRow(userId, entry.payload));
       } else if (entry.entityType === "watchSession") {
-        await upsertWatchSession(toWatchSessionRow(entry.payload));
+        await upsertWatchSession(toWatchSessionRow(userId, entry.payload));
       } else {
         throw new Error(`Unknown entityType: ${String(entry.entityType)}`);
       }
@@ -167,9 +180,9 @@ export async function POST(request: Request) {
   try {
     const since = typeof body.since === "string" ? body.since : null;
     const [scriptures, items, watchSessions, serverTime] = await Promise.all([
-      scripturesChangedSince(since),
-      itemsChangedSince(since),
-      watchSessionsChangedSince(since),
+      scripturesChangedSince(userId, since),
+      itemsChangedSince(userId, since),
+      watchSessionsChangedSince(userId, since),
       getServerTime(),
     ]);
 

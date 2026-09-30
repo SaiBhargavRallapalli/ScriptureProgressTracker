@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/dal";
 import { assertArchiveOrgUrl } from "@/lib/archiveOrg";
 import { MAX_UPLOAD_BYTES, uploadPdfBlob } from "@/lib/blobServer";
 
@@ -23,6 +24,9 @@ interface SaveBody {
 }
 
 export async function POST(request: Request) {
+  const session = await requireApiSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
   let body: SaveBody;
   try {
     body = await request.json();

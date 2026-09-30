@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/dal";
 import { MAX_UPLOAD_BYTES, uploadPdfBlob } from "@/lib/blobServer";
 
 // Only ever called from the explicit "Save permanently to cloud" action
@@ -16,6 +17,9 @@ import { MAX_UPLOAD_BYTES, uploadPdfBlob } from "@/lib/blobServer";
 // becomes a real problem.
 
 export async function POST(request: Request) {
+  const session = await requireApiSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
   let formData: FormData;
   try {
     formData = await request.formData();
@@ -34,6 +38,18 @@ export async function POST(request: Request) {
   if (file.type !== "application/pdf") {
     return NextResponse.json(
       { error: "Only PDF files can be saved permanently this way." },
+      { status: 400 }
+    );
+  }
+
+  // file.type is a client-declared MIME type — trivially spoofable — so
+  // also check the actual bytes start with a real PDF header before
+  // trusting this any further than the size/type checks above already do.
+  const header = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+  const isPdfMagicBytes = String.fromCharCode(...header) === "%PDF-";
+  if (!isPdfMagicBytes) {
+    return NextResponse.json(
+      { error: "That file doesn't look like a real PDF." },
       { status: 400 }
     );
   }

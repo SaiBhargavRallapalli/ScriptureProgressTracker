@@ -6,6 +6,7 @@ import Modal from "@/components/Modal";
 import NotesField from "@/components/NotesField";
 import PdfViewer from "@/components/PdfViewer";
 import SaveToCloudButton from "@/components/SaveToCloudButton";
+import TextViewer from "@/components/TextViewer";
 import VideoPlayerModal from "@/components/VideoPlayerModal";
 import { deleteItem, markItemCompleteManually, moveItem, setItemStatus } from "@/lib/items";
 import type { Item } from "@/lib/db";
@@ -14,6 +15,7 @@ const TYPE_BADGE: Record<Item["type"], string> = {
   youtube_video: "YouTube",
   pdf: "PDF",
   video_link: "Video link",
+  text_link: "Text",
 };
 
 function formatDuration(seconds?: number) {
@@ -70,7 +72,7 @@ export default function ItemRow({
                 ▶ Play
               </button>
             )}
-            {item.type === "pdf" && (
+            {(item.type === "pdf" || item.type === "text_link") && (
               <button
                 type="button"
                 onClick={() => setReading(true)}
@@ -101,6 +103,8 @@ export default function ItemRow({
                 </span>
                 <SaveToCloudButton item={item} />
               </>
+            ) : item.type === "text_link" ? (
+              <span>{item.textContent ? "Cached on this device" : "Not downloaded yet"}</span>
             ) : item.sourceUrl && !item.sourceUrl.startsWith("local:") ? (
               <a
                 href={item.sourceUrl}
@@ -164,6 +168,12 @@ export default function ItemRow({
       {reading && item.type === "pdf" && (
         <Modal onClose={() => setReading(false)} title={item.title}>
           <PdfViewer item={item} />
+        </Modal>
+      )}
+
+      {reading && item.type === "text_link" && (
+        <Modal onClose={() => setReading(false)} title={item.title}>
+          <TextViewer item={item} />
         </Modal>
       )}
     </div>

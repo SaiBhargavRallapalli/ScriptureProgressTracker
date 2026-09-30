@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/dal";
 import { assertArchiveOrgUrl } from "@/lib/archiveOrg";
 
 // GET /api/pdf-search/proxy?url=<archive.org PDF URL>
@@ -27,6 +28,9 @@ import { assertArchiveOrgUrl } from "@/lib/archiveOrg";
 // directly — see lib/items.ts's createItemFromDiscoveredPdfLink.
 
 export async function GET(request: NextRequest) {
+  const session = await requireApiSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
   const raw = request.nextUrl.searchParams.get("url");
   if (!raw) {
     return NextResponse.json({ error: "Missing url param." }, { status: 400 });

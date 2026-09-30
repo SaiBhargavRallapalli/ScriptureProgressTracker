@@ -1,13 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import {
-  runSync,
-  setSyncToken,
-  useLastSyncedAt,
-  useSyncToken,
-  useUnsyncedCount,
-} from "@/lib/sync";
+import { runSync, useLastSyncedAt, useUnsyncedCount } from "@/lib/sync";
+import { eraseActiveUserDb } from "@/lib/db";
+import { logout } from "@/lib/auth/actions";
 
 type Message = { type: "success" | "error"; text: string } | null;
 
@@ -16,29 +12,13 @@ function formatLastSynced(iso: string | undefined): string {
   return new Date(iso).toLocaleString();
 }
 
-export default function SettingsPage() {
-  const savedToken = useSyncToken();
+export default function SettingsClient({ user }: { user: { email: string } }) {
   const lastSyncedAt = useLastSyncedAt();
   const unsyncedCount = useUnsyncedCount();
 
-  const [tokenInput, setTokenInput] = useState("");
-  const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [erasing, setErasing] = useState(false);
   const [message, setMessage] = useState<Message>(null);
-
-  const saveToken = async () => {
-    const value = tokenInput.trim();
-    if (!value) return;
-    setSaving(true);
-    setMessage(null);
-    try {
-      await setSyncToken(value);
-      setTokenInput("");
-      setMessage({ type: "success", text: "Sync token saved on this device." });
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const syncNow = async () => {
     setSyncing(true);
@@ -58,6 +38,23 @@ export default function SettingsPage() {
     }
   };
 
+  const eraseLocalData = async () => {
+    if (
+      !window.confirm(
+        "This deletes all Scriptures/Items/notes stored on THIS device. Anything already synced to the cloud is unaffected and will come back next time you log in and sync. Continue?"
+      )
+    ) {
+      return;
+    }
+    setErasing(true);
+    try {
+      await eraseActiveUserDb();
+      await logout();
+    } finally {
+      setErasing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-semibold tracking-tight text-amber-900 dark:text-amber-100">
@@ -66,42 +63,21 @@ export default function SettingsPage() {
 
       <div className="flex flex-col gap-3 rounded-lg border border-amber-900/10 bg-white p-4 dark:border-amber-100/10 dark:bg-neutral-900">
         <div>
+          <h2 className="font-medium text-amber-900 dark:text-amber-100">Account</h2>
+          <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+            Signed in as <span className="font-medium">{user.email}</span>.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-lg border border-amber-900/10 bg-white p-4 dark:border-amber-100/10 dark:bg-neutral-900">
+        <div>
           <h2 className="font-medium text-amber-900 dark:text-amber-100">Cloud sync</h2>
           <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
             Optional cross-device backup (ARCHITECTURE.md §6). Nothing here is
             required to use the app — everything already works fully offline
-            on this device. Paste the same sync token on every device you
-            want kept in sync with each other.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <label className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-            Sync token
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveToken()}
-              placeholder={savedToken ? "•••••••••••••••• (saved)" : "Paste your SYNC_TOKEN"}
-              disabled={saving}
-              className="flex-1 rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-950"
-            />
-            <button
-              type="button"
-              onClick={saveToken}
-              disabled={saving || !tokenInput.trim()}
-              className="shrink-0 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </div>
-          <p className="text-xs text-neutral-400 dark:text-neutral-500">
-            {savedToken
-              ? "A token is saved on this device."
-              : "No token saved yet — sync is off until you add one."}
+            on this device. Signing in on another device with the same
+            account keeps them in sync automatically.
           </p>
         </div>
 
@@ -121,7 +97,7 @@ export default function SettingsPage() {
           <button
             type="button"
             onClick={syncNow}
-            disabled={syncing || !savedToken}
+            disabled={syncing}
             className="shrink-0 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
           >
             {syncing ? "Syncing…" : "Sync now"}
@@ -139,6 +115,25 @@ export default function SettingsPage() {
           working connection — the button above is for triggering it on
           demand (e.g. right before switching devices).
         </p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-lg border border-red-900/10 bg-white p-4 dark:border-red-100/10 dark:bg-neutral-900">
+        <div>
+          <h2 className="font-medium text-red-800 dark:text-red-300">Shared device</h2>
+          <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+            Logging out normally leaves this device&apos;s local data in
+            place (so unsynced offline edits are never at risk). If this is
+            a shared/public computer, erase it explicitly instead.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={eraseLocalData}
+          disabled={erasing}
+          className="self-start rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/40"
+        >
+          {erasing ? "Erasing…" : "Log out and erase this device's local data"}
+        </button>
       </div>
     </div>
   );

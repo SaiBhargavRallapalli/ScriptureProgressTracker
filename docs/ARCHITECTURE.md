@@ -92,19 +92,44 @@ calling out: it removes an entire class of bugs where the aggregate and the deta
 | PDF rendering | pdf.js | Standard, works offline once the PDF blob is cached. |
 | Charts | Recharts | For the dashboard/monthly-progress view. |
 
-**On auth:** this is a single-user app. A full user/session system is unnecessary complexity for
-one person. Two reasonable options, in order of how little you'll regret building:
+**On auth (superseded by Phase 7 — kept for history):** this section originally argued against
+building real accounts for what was assumed to stay a single-user tool, on the reasoning that a
+full user/session system is unnecessary complexity for one person, and recommended a single shared
+bearer token (checked in `proxy.ts`) instead. That assumption changed once a second person needed
+their own isolated data on the same deployment — Phase 7 (§8) replaces the bearer token with real
+signup/login. The design, once it became worth building:
 
-- **No auth on the device itself** — the PWA is only useful to whoever has your phone/laptop
-  unlocked. If cloud sync is enabled, the sync API route is protected by a single long-lived
-  bearer token you generate once and paste into the app's settings screen. No user table, no
-  password reset flow, no session cookies.
-- If you want a lock screen for privacy (family shares the device), add a local PIN check in the
-  PWA itself — this is a client-side UX gate, not real security, and shouldn't be confused with
-  the sync token above.
-
-Don't build NextAuth/OAuth for this unless a second person will ever use it. That's real effort
-with no payoff for a single-user tool.
+- **Stateless JWT sessions, not a stored session table.** `lib/auth/session.ts` signs a JWT
+  (`jose`, `SESSION_SECRET` env var) containing `{userId, email, expiresAt}` and stores it in an
+  httpOnly, secure, `sameSite: "lax"` cookie. No session table means no per-device revocation
+  before a token's own 30-day expiry — the only global kill switch is rotating `SESSION_SECRET`,
+  which logs out every account at once. Accepted tradeoff: this app's actual threat model is
+  self-hosted personal/small-group use, not a target for sophisticated session hijacking, and a
+  DB-backed session table's added complexity wasn't judged worth it for that model.
+- **Two enforcement layers, per the Next.js authentication guide's own explicit warning that
+  middleware/Proxy should never be the sole authorization boundary:** `proxy.ts` does only an
+  *optimistic* check (decrypt the cookie, redirect if absent/invalid) — cheap, no DB call, and it
+  runs on every request including prefetches. The *real*, enforced check is
+  `lib/auth/dal.ts`'s `requireSession()`/`requireApiSession()`, called from the authenticated route
+  group's layout and from every `app/api/**/route.ts` handler individually (a Proxy matcher
+  excluding a path also skips Server Actions on that path, so nothing can rely on Proxy alone).
+- **Password hashing via `node:crypto`'s built-in `scrypt`**, not bcrypt/argon2 — those ship as
+  native addons with prebuild-matching risk on whatever container ends up building/running this;
+  Node already has a well-reviewed KDF built in.
+- **Signup is invite-gated (`SIGNUP_CODE`), not open.** All accounts on one deployment share that
+  deployment's YouTube API quota, Blob storage, and Postgres database — there's no per-user
+  billing to make open signup self-limiting, so it's gated instead.
+- **IndexedDB isolation happens at the database *name*, not a row column.** IndexedDB is scoped
+  per browser profile, not per account, so two people using the same browser need more than a
+  `userId` filter on shared rows — each account gets its own database
+  (`scripture-tracker-<userId>`, `lib/db.ts`'s `openUserDb()`/`closeUserDb()`), opened on login and
+  closed on logout. Postgres, by contrast, *is* one shared set of tables with a `userId` column
+  added to each (`lib/syncDb.ts`), since sync's whole job is one server-side store serving many
+  devices/accounts.
+- Logging out does **not** erase the outgoing account's local IndexedDB data by default — it only
+  stops the app opening it, so an unsynced offline edit is never at risk from an accidental/looping
+  logout. Settings has an explicit, opt-in "log out and erase this device's local data" action for
+  the shared-computer case, which is the exception, not the default.
 
 ---
 
@@ -303,7 +328,15 @@ than one big bang:
   breakdown) as Recharts views — this replaces your spreadsheet's Dashboard tab.
 - **Phase 6 — Cloud sync.** Neon schema, `/api/sync` route, outbox flush logic, bearer-token
   protection. Only build this once you're actually using two devices.
-- **Phase 7 (optional) — Native packaging.** Tauri desktop build and/or Capacitor mobile build, if
+- **Phase 7 — Accounts (multi-user).** Real signup/login (`lib/auth/`), replacing Phase 6's shared
+  bearer token with per-account sessions; a `userId` column on every synced table; a separate
+  IndexedDB database per account. Only worth building once a second person actually needs their
+  own isolated data on the same deployment (see §2's "On auth").
+- **Phase 7b — Shlokam.org Gita import.** A static, deterministic list of the 18 Bhagavad Gita
+  chapter URLs (`lib/shlokam.ts`), a same-origin fetch proxy (`app/api/text-search/proxy`), and a
+  sandboxed in-app reader (`TextViewer.tsx`) — the same license-cautious storage rule as Phase 4b's
+  archive.org PDFs, since shlokam.org publishes no license anywhere on the site.
+- **Phase 8 (optional) — Native packaging.** Tauri desktop build and/or Capacitor mobile build, if
   "Add to Home Screen" isn't enough.
 
 Phases 0–1 alone are a complete, usable, fully offline personal tracker with no backend

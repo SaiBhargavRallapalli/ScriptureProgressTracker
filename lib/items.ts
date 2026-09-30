@@ -6,6 +6,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db, type Item } from "./db";
 import { newId } from "./id";
 import { createWatchSession } from "./watchSessions";
+import { GITA_CHAPTERS } from "./shlokam";
 
 const COMPLETION_THRESHOLD = 0.9;
 
@@ -201,6 +202,53 @@ export async function createItemFromYoutubeVideo(
   const item = youtubeVideoToItem(scriptureId, position, video, now);
   await db.items.add(item);
   return item;
+}
+
+// --- Shlokam.org Gita import (Phase 7) ------------------------------------
+//
+// lib/shlokam.ts's GITA_CHAPTERS is a static, deterministic list (no
+// scraping/search involved — see that file's comment), so this is a
+// straight bulk-insert, structurally identical to
+// createItemsFromYoutubePlaylist above. sourceUrl points at our own
+// /api/text-search/proxy route rather than the raw shlokam.org URL, same
+// CORS-and-license-caution reasoning as the PDF "link" items above.
+
+export async function createItemsFromShlokamGita(scriptureId: string): Promise<Item[]> {
+  const now = new Date().toISOString();
+  const base = await nextPosition(scriptureId);
+  const items: Item[] = GITA_CHAPTERS.map((chapter, index) => ({
+    id: newId(),
+    scriptureId,
+    position: base + index,
+    type: "text_link",
+    title: chapter.title,
+    sourceUrl: `/api/text-search/proxy?url=${encodeURIComponent(chapter.url)}`,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  }));
+  await db.items.bulkAdd(items);
+  return items;
+}
+
+/**
+ * Text equivalent of resolveAndCachePdfBlob: fetches the sanitized HTML
+ * through our own proxy once and caches it into Item.textContent, so
+ * every subsequent open needs zero network — same fetch-once pattern,
+ * just for a text_link Item instead of a pdf one.
+ */
+export async function resolveAndCacheTextContent(item: Item): Promise<string> {
+  if (item.textContent) return item.textContent;
+
+  const res = await fetch(item.sourceUrl);
+  if (!res.ok) {
+    throw new Error(`Couldn't download this page (HTTP ${res.status}).`);
+  }
+  const html = await res.text();
+
+  await db.items.update(item.id, { textContent: html, updatedAt: new Date().toISOString() });
+
+  return html;
 }
 
 // --- Watch tracking (Phase 3) --------------------------------------------

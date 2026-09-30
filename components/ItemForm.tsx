@@ -4,7 +4,9 @@ import { useRef, useState, type FormEvent } from "react";
 import { createItem } from "@/lib/items";
 import type { Item } from "@/lib/db";
 
-type ItemType = Item["type"];
+// text_link items are only ever created in bulk via GitaImport, not
+// through this manual single-item form.
+type ItemType = Exclude<Item["type"], "text_link">;
 
 const TYPE_LABELS: Record<ItemType, string> = {
   youtube_video: "YouTube video",

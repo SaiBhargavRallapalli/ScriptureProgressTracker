@@ -11,14 +11,18 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db, withoutOutboxTracking, type Item, type OutboxEntry, type Scripture, type WatchSession } from "./db";
 
 const META_KEYS = {
-  syncToken: "syncToken",
   lastSyncedAt: "lastSyncedAt",
   since: "syncSince",
 } as const;
 
 const BATCH_SIZE = 50;
 
-// --- Meta (per-device sync settings) --------------------------------------
+// --- Meta (per-device sync bookkeeping) ------------------------------------
+//
+// Phase 7: auth is now a session cookie, sent automatically by the browser
+// on every same-origin fetch — there's no separate sync token to store or
+// paste in Settings anymore (proxy.ts / requireApiSession() gate
+// /api/sync the same way they gate everything else).
 
 async function getMeta(key: string): Promise<string | undefined> {
   const row = await db.meta.get(key);
@@ -27,19 +31,6 @@ async function getMeta(key: string): Promise<string | undefined> {
 
 async function setMeta(key: string, value: string): Promise<void> {
   await db.meta.put({ key, value });
-}
-
-export async function getSyncToken(): Promise<string | undefined> {
-  return getMeta(META_KEYS.syncToken);
-}
-
-export async function setSyncToken(token: string): Promise<void> {
-  await setMeta(META_KEYS.syncToken, token.trim());
-}
-
-/** Reactive — Settings page uses this so the field/status update live. */
-export function useSyncToken(): string | undefined {
-  return useLiveQuery(() => getMeta(META_KEYS.syncToken), []);
 }
 
 export function useLastSyncedAt(): string | undefined {
@@ -163,11 +154,6 @@ function outboxToBatchEntry(entry: OutboxEntry) {
  * having made a local edit first.
  */
 export async function runSync(): Promise<SyncResult> {
-  const token = await getSyncToken();
-  if (!token) {
-    return { ok: false, error: "No sync token set yet — paste one in Settings first." };
-  }
-
   const pending = await db.outbox.orderBy("createdAt").toArray();
   const batches: OutboxEntry[][] = [];
   for (let i = 0; i < pending.length; i += BATCH_SIZE) {
@@ -184,10 +170,7 @@ export async function runSync(): Promise<SyncResult> {
     try {
       res = await fetch("/api/sync", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ since, entries: batch.map(outboxToBatchEntry) }),
       });
     } catch {

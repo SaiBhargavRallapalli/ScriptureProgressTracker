@@ -6,6 +6,11 @@
 // watchSessions is mirrored into the `outbox` table automatically (via the
 // Dexie hooks registered below), and lib/sync.ts is the only thing that
 // ever reads the network here.
+//
+// Phase 7 (accounts): IndexedDB is scoped per browser profile, not per
+// account, so isolation between two people using the same browser can't
+// live inside a single database's rows — it lives one level up, at the
+// database's *name*. See openUserDb()/closeUserDb() below.
 
 import Dexie, { type EntityTable } from "dexie";
 
@@ -25,7 +30,7 @@ export interface Item {
   id: string;
   scriptureId: string;
   position: number;
-  type: "youtube_video" | "pdf" | "video_link";
+  type: "youtube_video" | "pdf" | "video_link" | "text_link";
   title: string;
   thumbnailUrl?: string;
   sourceUrl: string;
@@ -43,6 +48,12 @@ export interface Item {
   pdfBlob?: Blob;
   pdfStorage?: "local" | "blob" | "link";
   licenseUrl?: string;
+  // Phase 7 (Shlokam.org text_link items): the sanitized HTML body fetched
+  // through app/api/text-search/proxy, cached locally the first time this
+  // Item is opened so re-reading never needs the network again — same
+  // fetch-once-cache-forever shape as pdfBlob above, just for text instead
+  // of PDF bytes. Never uploaded anywhere; sync never carries it either.
+  textContent?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -91,14 +102,15 @@ class ScriptureTrackerDB extends Dexie {
   outbox!: EntityTable<OutboxEntry, "id">;
   meta!: EntityTable<Meta, "key">;
 
-  constructor() {
-    super("scripture-tracker");
+  constructor(userId: string) {
+    super(`scripture-tracker-${userId}`);
 
     // Version 1: original four tables. targetPageCount, the "reading"
-    // source value, and WatchSession.updatedAt above are new optional/
-    // widened fields on existing objects, not new indexes — Dexie/
-    // IndexedDB doesn't need a version bump for those, since objects are
-    // schemaless beyond their declared indexes.
+    // source value, WatchSession.updatedAt, and Item.type: "text_link" /
+    // Item.textContent above are new optional/widened fields on existing
+    // objects, not new indexes — Dexie/IndexedDB doesn't need a version
+    // bump for those, since objects are schemaless beyond their declared
+    // indexes.
     this.version(1).stores({
       scriptures: "id, title, sourceType, createdAt, updatedAt",
       items:
@@ -171,12 +183,16 @@ function queueOutboxEntry(
 ) {
   if (applyingRemoteChanges) return;
 
-  // pdfBlob is a local-only cache of file bytes (Phase 4/4b) — it never
-  // belongs in the sync payload: Postgres has no column for it, and the
-  // actual PDF storage decision already goes through Vercel Blob or an
-  // external link, not through sync.
+  // pdfBlob/textContent are local-only caches of fetched bytes/HTML
+  // (Phase 4/4b, Phase 7) — neither belongs in the sync payload: Postgres
+  // has no column for them, and the actual storage decision (Blob vs.
+  // link vs. device-local-only) already happens elsewhere, not through
+  // sync.
   const payload = { ...rawPayload };
-  if (entityType === "item") delete payload.pdfBlob;
+  if (entityType === "item") {
+    delete payload.pdfBlob;
+    delete payload.textContent;
+  }
 
   if (operation === "delete") {
     // Tombstone: stamp a fresh updatedAt so the deletion reliably wins
@@ -232,5 +248,71 @@ function registerOutboxHooks(dexie: Dexie) {
   }
 }
 
-// Single shared instance — import { db } from "@/lib/db" wherever needed.
-export const db = new ScriptureTrackerDB();
+// --- Per-account database lifecycle (Phase 7) ------------------------------
+//
+// Each account gets its own IndexedDB database, named by userId, opened on
+// login and closed on logout via openUserDb()/closeUserDb() (called from
+// components/DbProvider.tsx, mounted inside the authenticated layout once
+// the session is known). Every existing query in lib/scriptures.ts /
+// lib/items.ts / lib/watchSessions.ts / lib/stats.ts / lib/sync.ts keeps
+// calling `db.scriptures...`/`db.items...` completely unchanged — the
+// Proxy below just forwards to whichever database is currently open.
+//
+// Logging out does NOT delete the outgoing account's local data — it only
+// stops the app from opening it, so unsynced offline edits are never at
+// risk of being lost by an accidental/looping logout. On a genuinely
+// shared device, Settings' "Log out and erase this device's local data"
+// is the explicit, opt-in escape hatch (calls db.delete() below) — not
+// the default.
+
+let activeDb: ScriptureTrackerDB | null = null;
+let activeUserId: string | null = null;
+
+/** The pre-accounts database name — still openable once, by
+ * DbProvider's one-time migration, to copy an existing single-user
+ * install's data into that person's new per-account database. */
+export const LEGACY_DB_NAME = "scripture-tracker";
+
+export function openUserDb(userId: string): ScriptureTrackerDB {
+  if (activeDb && activeUserId === userId) return activeDb;
+  activeDb?.close();
+  activeDb = new ScriptureTrackerDB(userId);
+  activeUserId = userId;
+  return activeDb;
+}
+
+export function closeUserDb(): void {
+  activeDb?.close();
+  activeDb = null;
+  activeUserId = null;
+}
+
+export function getActiveUserId(): string | null {
+  return activeUserId;
+}
+
+/** Deletes the currently-open account's local IndexedDB database outright
+ * — used only by Settings' explicit "erase local data" escape hatch. */
+export async function eraseActiveUserDb(): Promise<void> {
+  if (!activeDb) return;
+  const name = activeDb.name;
+  activeDb.close();
+  activeDb = null;
+  activeUserId = null;
+  await Dexie.delete(name);
+}
+
+// import { db } from "@/lib/db" wherever needed — resolves to whichever
+// account's database openUserDb() most recently opened. Throws if nothing
+// has opened one yet, which should only ever happen if a query somehow
+// runs before DbProvider mounts.
+export const db = new Proxy({} as ScriptureTrackerDB, {
+  get(_target, prop) {
+    if (!activeDb) {
+      throw new Error(
+        "No user database open — openUserDb(userId) must run (via DbProvider) before any query."
+      );
+    }
+    return Reflect.get(activeDb, prop, activeDb);
+  },
+});

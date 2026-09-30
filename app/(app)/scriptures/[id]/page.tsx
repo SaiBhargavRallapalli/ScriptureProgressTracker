@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import ScriptureForm from "@/components/ScriptureForm";
 import ConfirmButton from "@/components/ConfirmButton";
+import GitaImport from "@/components/GitaImport";
 import ItemForm from "@/components/ItemForm";
 import ItemRow from "@/components/ItemRow";
 import YoutubeImport from "@/components/YoutubeImport";
@@ -120,6 +121,7 @@ export default function ScriptureDetailPage() {
 
         <YoutubeImport scriptureId={scripture.id} />
         <PdfDiscovery scriptureId={scripture.id} defaultQuery={scripture.title} />
+        <GitaImport scriptureId={scripture.id} />
 
         {addingItem && (
           <ItemForm scriptureId={scripture.id} onDone={() => setAddingItem(false)} />

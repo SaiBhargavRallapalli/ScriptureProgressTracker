@@ -257,70 +257,107 @@ the numbers are correct the moment the underlying rows are.
 
 Only worth setting up once you're actually using the app on two devices
 — everything works fully offline on one device without it
-(ARCHITECTURE.md §6). Two things to add:
+(ARCHITECTURE.md §6). Requires **Neon Postgres**, via the Vercel
+Marketplace:
 
-1. **Neon Postgres**, via the Vercel Marketplace:
-   - Vercel dashboard → your project → **Storage** tab → **Create
-     Database** → **Neon** (Postgres).
-   - Connect it to this project. The dashboard's "Quickstart" panel shows
-     several env var names (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`,
-     `PGHOST`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, ...) — use the
-     plain pooled `DATABASE_URL`, not the `*_UNPOOLED` or `PG*`/`POSTGRES_*`
-     variants.
-   - Add it to `.env.local`:
-     ```
-     DATABASE_URL=postgres://...
-     ```
-   - For production, add the same variable in Vercel's Project Settings
-     → Environment Variables, then redeploy.
-   - No separate migration step — `lib/syncDb.ts`'s `ensureSchema()` runs
-     `create table if not exists` for all three tables the first time
-     `/api/sync` is called after a cold start.
-   - Neon's free tier scales compute to zero after 5 minutes idle, so
-     the first sync after a while may take a second or two (cold start)
-     — expected, not a bug.
+- Vercel dashboard → your project → **Storage** tab → **Create
+  Database** → **Neon** (Postgres).
+- Connect it to this project. The dashboard's "Quickstart" panel shows
+  several env var names (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`,
+  `PGHOST`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, ...) — use the
+  plain pooled `DATABASE_URL`, not the `*_UNPOOLED` or `PG*`/`POSTGRES_*`
+  variants.
+- Add it to `.env.local`:
+  ```
+  DATABASE_URL=postgres://...
+  ```
+- For production, add the same variable in Vercel's Project Settings
+  → Environment Variables, then redeploy.
+- No separate migration step — `lib/syncDb.ts`'s `ensureSchema()` runs
+  `create table if not exists` for all three tables the first time
+  `/api/sync` is called after a cold start.
+- Neon's free tier scales compute to zero after 5 minutes idle, so
+  the first sync after a while may take a second or two (cold start)
+  — expected, not a bug.
 
-2. **A sync token** — a long random string you (or an assistant helping
-   you build this) generate yourself, e.g.:
+Sync itself needs no separate token to set up (see Phase 7 below) —
+being logged in is what authorizes `/api/sync`.
+
+## Phase 7 — accounts (multi-user)
+
+Real signup/login, replacing Phase 6's single shared bearer token. Two
+new environment variables:
+
+1. **`SESSION_SECRET`** — signs/verifies session cookies
+   (`lib/auth/session.ts`). Generate your own:
    ```
-   openssl rand -hex 32
+   openssl rand -base64 32
    ```
-   Add it to `.env.local`:
+   Add it to `.env.local` and to Vercel's production env vars. Rotating
+   this logs every account out at once — sessions are stateless JWTs
+   with no server-side revocation list, a deliberate tradeoff for this
+   app's threat model (see `docs/ARCHITECTURE.md` §2).
+
+2. **`SIGNUP_CODE`** — required on the signup form
+   (`lib/auth/actions.ts`'s `signup()`). All accounts on one deployment
+   share its YouTube API quota, Blob storage, and Postgres database with
+   no per-user billing, so signup is gated rather than open to anyone
+   who finds the URL. Generate your own:
    ```
-   SYNC_TOKEN=<the generated value>
+   openssl rand -hex 16
    ```
-   and to Vercel's production env vars too. Then paste the *same* value
-   into the app's Settings page on every device you want kept in sync —
-   it's checked by `proxy.ts` (Next.js 16's renamed `middleware.ts`) on
-   every request to `/api/sync/*`, rejecting anything without a matching
-   `Authorization: Bearer <token>` header.
+   and share it only with people you want able to create an account.
+
+3. **`LEGACY_ADMIN_EMAIL`** (optional, one-time use) — only needed if
+   you're upgrading a deployment that already has data from before
+   accounts existed. Set it to the email you're about to sign up with,
+   sign up, then `POST /api/admin/claim-legacy-data` while logged in as
+   that account — this assigns every pre-accounts ("ownerless") row to
+   your new account. Safe to call more than once (a no-op after the
+   first successful run). Unset the env var afterward.
+
+Each account gets its own IndexedDB database on every device it logs
+into (`scripture-tracker-<userId>`) — IndexedDB is scoped per browser
+profile, not per account, so this is what keeps two people's local data
+apart even on a shared computer. Logging out does not erase that data
+(so an unsynced offline edit is never at risk from an accidental
+logout); Settings has an explicit "Log out and erase this device's
+local data" action for shared/public computers.
 
 ## Verifying the Phase 6 (cloud sync) acceptance criteria
 
-1. **Change propagates between "devices"**: open the app in one browser
+1. **Change propagates between "devices"**: sign up/log in in one browser
    profile, make a change (e.g. add a scripture or mark an item
-   complete), open Settings and click "Sync now". Open the app in a
-   *different* browser profile (or an incognito window) with the same
-   sync token pasted into its own Settings, click "Sync now" there —
-   confirm the change appears.
+   complete), open Settings and click "Sync now". Log into the *same*
+   account in a *different* browser profile (or an incognito window),
+   click "Sync now" there — confirm the change appears.
 2. **Conflicting edits resolve by `updatedAt`, no crash**: without
    syncing in between, edit the same Item differently on both profiles
    (e.g. different notes, or a different status), then sync profile A,
    then sync profile B, then sync profile A again. Whichever edit has
    the later `updatedAt` should be the one both profiles end up with —
    confirm neither sync call errors or crashes.
-3. **Missing token is rejected**: with the app running locally,
-   ```
-   curl -i -X POST http://localhost:3000/api/sync \
-     -H "Content-Type: application/json" \
-     -d '{"since": null, "entries": []}'
-   ```
-   should come back `401 Unauthorized` (no `Authorization` header at
-   all). Repeat with the right header:
-   ```
-   curl -i -X POST http://localhost:3000/api/sync \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer $SYNC_TOKEN" \
-     -d '{"since": null, "entries": []}'
-   ```
-   should come back `200` with a `changes` object.
+3. **Two accounts stay isolated**: sign up a second account and confirm
+   it starts with zero scriptures/items — none of the first account's
+   data is visible, and syncing the second account never returns rows
+   belonging to the first.
+
+## Verifying the Phase 7 (accounts) acceptance criteria
+
+1. **Logged-out redirect**: with the app running locally, visiting
+   `http://localhost:3000/` in a browser with no session cookie should
+   redirect to `/login`. `curl -i http://localhost:3000/api/sync` (a
+   plain `GET`, no cookie) should come back `401 Unauthorized`.
+2. **Wrong invite code rejected**: on `/signup`, submitting with an
+   incorrect invite code should show an inline error, not create an
+   account.
+3. **Lockout after repeated failures**: on `/login`, submit the wrong
+   password 5 times for the same account — the 6th attempt (even with
+   the *correct* password) should be rejected with a "too many failed
+   attempts" message for about 15 minutes.
+4. **Per-account isolation, end to end**: sign up two accounts, add a
+   scripture to each, and confirm neither shows up for the other — in
+   the UI, in DevTools → Application → IndexedDB (two differently-named
+   `scripture-tracker-<userId>` databases), and in Postgres (`select
+   "userId", count(*) from scriptures group by "userId"` shows separate
+   rows per account).

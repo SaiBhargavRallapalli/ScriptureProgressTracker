@@ -1,10 +1,11 @@
 # Scripture Tracker
 
 A local-first, installable PWA for tracking scripture study and sadhana
-habits. See `docs/ARCHITECTURE.md` for the full design and phased build
-plan; this README covers what's built so far and how to run it.
+habits — supports any number of independent accounts, each with fully
+isolated data. See `docs/ARCHITECTURE.md` for the full design and phased
+build plan; this README covers what's built so far and how to run it.
 
-## What's built (Phases 0-6)
+## What's built (Phases 0-7)
 
 **Phase 0 — offline app shell.** Next.js (App Router) + TypeScript +
 Tailwind. `public/manifest.json` + a generated service worker
@@ -74,14 +75,42 @@ upsert by `id` with a strict "only overwrite if the incoming `updatedAt`
 is newer" rule (last-write-wins; ARCHITECTURE.md §6), and a delete is a
 tombstone (`deletedAt` set), never a hard delete, so it can propagate to
 other devices on their next pull. Postgres access is server-only
-(`lib/syncDb.ts`, `postgres.js`, no ORM — three tables didn't need one);
-`proxy.ts` (Next.js 16's renamed `middleware.ts`) rejects any
-`/api/sync/*` request without the right bearer token. Sync runs on the
-browser's `online` event (confirmed by the sync fetch actually
-succeeding, not just `navigator.onLine`) and from a "Sync now" button on
-the Settings page, which also shows when it last succeeded. None of this
-is required to use the app — everything still works fully offline on a
-single device with sync never configured.
+(`lib/syncDb.ts`, `postgres.js`, no ORM — three tables didn't need one).
+Sync runs on the browser's `online` event (confirmed by the sync fetch
+actually succeeding, not just `navigator.onLine`) and from a "Sync now"
+button on the Settings page, which also shows when it last succeeded.
+None of this is required to use the app — everything still works fully
+offline on a single device with sync never configured.
+
+**Phase 7 — accounts (multi-user).** Real signup/login/logout, replacing
+the single shared bearer token from Phase 6 — see `docs/ARCHITECTURE.md`
+§2. `lib/auth/` holds the whole auth stack: stateless JWT sessions in an
+httpOnly cookie (`jose`, no auth library), scrypt password hashing
+(`node:crypto`, no bcrypt/argon2 native addon), and a Data Access Layer
+(`lib/auth/dal.ts`) that every Server Component/Route Handler calls to
+get the real, enforced check — `proxy.ts` only does an optimistic
+cookie-presence check now, per the Next.js authentication guide's own
+guidance. Every Postgres table gets a `userId` column (`lib/syncDb.ts`),
+so sync is fully isolated per account; each account also gets its own
+IndexedDB database (`scripture-tracker-<userId>`, `lib/db.ts`'s
+`openUserDb()`), since IndexedDB itself is scoped per browser profile,
+not per account. Signup requires an invite code (`SIGNUP_CODE`) since all
+accounts on one deployment share its YouTube/Blob/Postgres resources with
+no per-user billing.
+
+**Phase 7b — Shlokam.org Gita import.** "Import Bhagavad Gita (18
+chapters)" on a scripture's page adds all 18 chapters as readable pages
+from shlokam.org's deterministic `/gita/gita-chapter-<N>-nav.htm` URLs
+(`lib/shlokam.ts`) — no scraping/search involved, unlike the archive.org
+PDF discovery above. shlokam.org publishes no license anywhere on the
+site, so this follows the same storage rule as an unlicensed PDF result:
+never re-hosted on our own storage, fetched through our own proxy
+(`app/api/text-search/proxy/route.ts`, script/style-stripped) and cached
+only into the requesting device's IndexedDB (`Item.textContent`) the
+first time it's opened. `components/TextViewer.tsx` renders it in a
+fully sandboxed iframe (`sandbox=""`) as defense in depth against
+third-party markup, and tracks reading time the same way `PdfViewer.tsx`
+does.
 
 ## Running it
 
@@ -104,10 +133,11 @@ npm run start
 
 See `docs/SETUP.md` for exact steps to deploy to Vercel's free Hobby
 plan, required environment variables (`YOUTUBE_API_KEY`,
-`BLOB_READ_WRITE_TOKEN`, `DATABASE_URL`, `SYNC_TOKEN`), and a checklist
-for verifying each phase's acceptance criteria yourself.
+`BLOB_READ_WRITE_TOKEN`, `DATABASE_URL`, `SESSION_SECRET`,
+`SIGNUP_CODE`), and a checklist for verifying each phase's acceptance
+criteria yourself.
 
 ## What's next
 
-See `docs/ARCHITECTURE.md` §8 for the full phase list — Phase 7
+See `docs/ARCHITECTURE.md` §8 for the full phase list — Phase 8
 (optional native packaging) is all that's left.

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/dal";
 import {
   YoutubeApiError,
   extractVideoId,
@@ -14,6 +15,9 @@ export interface VideoImportResponse {
 }
 
 export async function POST(request: Request) {
+  const session = await requireApiSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
   let body: { url?: string };
   try {
     body = await request.json();
