@@ -113,9 +113,20 @@ export default function DbProvider({ userId, children }: { userId: string; child
 
   useEffect(() => {
     let cancelled = false;
-    needsLegacyClaimPrompt(userId).then((needsPrompt) => {
-      if (!cancelled) setPhase(needsPrompt ? "prompt" : "ready");
-    });
+    needsLegacyClaimPrompt(userId)
+      .then((needsPrompt) => {
+        if (!cancelled) setPhase(needsPrompt ? "prompt" : "ready");
+      })
+      .catch((err) => {
+        // React (dev-mode Strict Mode) mounts, cleans up, and re-mounts
+        // every effect once — the cleanup below closes the database this
+        // in-flight check is still querying, which throws a
+        // DatabaseClosedError. That's an expected artifact of the
+        // synthetic double-invoke, not a real failure, so only surface
+        // it when this run wasn't the one cancelled.
+        if (cancelled) return;
+        console.error("Failed to open local database:", err);
+      });
     return () => {
       cancelled = true;
       closeUserDb();
